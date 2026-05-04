@@ -1,20 +1,22 @@
 # open-brain-extensions
 
-Extensions for the [Open Brain MCP server](https://github.com/open-brain/open-brain) — a thought capture and knowledge management system.
+> Extensions for [Open Brain](https://github.com/open-brain/open-brain) — a thought capture and knowledge management system powered by MCP.
 
-## Overview
-
-This repository contains extensions that enhance Open Brain functionality, adding new tools, workflows, and integrations.
+---
 
 ## Extensions
 
-### [tokscript-ingestion](./tokscript-ingestion)
+| Extension | Description |
+|-----------|-------------|
+| [tokscript-ingestion](./tokscript-ingestion) | Fetch and store video transcripts from TikTok, Instagram Reels, and YouTube Shorts via [TokScript](https://tokscript.com) |
 
-Fetches and stores video transcripts from TikTok, Instagram Reels, and YouTube Shorts via [TokScript](https://tokscript.com).
+---
 
-## Getting Started
+## Prerequisites
 
-> Prerequisites and setup instructions will be added as the project develops.
+Each extension assumes a working Open Brain setup. See the [Open Brain repository](https://github.com/open-brain/open-brain) for base setup instructions.
+
+---
 
 ## Contributing
 
