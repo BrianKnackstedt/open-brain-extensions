@@ -6,6 +6,12 @@ Extensions for the [Open Brain MCP server](https://github.com/open-brain/open-br
 
 This repository contains extensions that enhance Open Brain functionality, adding new tools, workflows, and integrations.
 
+## Extensions
+
+### [tokscript-ingestion](./tokscript-ingestion)
+
+Ingests TokScript content into Open Brain.
+
 ## Getting Started
 
 > Prerequisites and setup instructions will be added as the project develops.
