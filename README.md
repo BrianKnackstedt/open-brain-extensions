@@ -10,7 +10,7 @@ This repository contains extensions that enhance Open Brain functionality, addin
 
 ### [tokscript-ingestion](./tokscript-ingestion)
 
-Ingests TokScript content into Open Brain.
+Fetches and stores video transcripts from TikTok, Instagram Reels, and YouTube Shorts via [TokScript](https://tokscript.com).
 
 ## Getting Started
 
