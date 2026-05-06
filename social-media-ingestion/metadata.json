@@ -1,0 +1,26 @@
+{
+  "name": "Social Media Ingestion",
+  "description": "Fetch and store social media transcripts from TikTok, Instagram Reels, YouTube Shorts, and hosted media URLs into dedicated Open Brain tables with semantic search.",
+  "category": "extensions",
+  "author": {
+    "name": "Nate B. Jones",
+    "github": "NateBJones"
+  },
+  "version": "1.0.0",
+  "requires": {
+    "open_brain": true,
+    "services": [
+      "TokScript account for Instagram/Reels and fallback extraction",
+      "ElevenLabs Speech to Text API key for TikTok/YouTube video transcription",
+      "OpenRouter API key for embeddings and TikTok photo carousel vision OCR"
+    ],
+    "tools": ["Supabase CLI"]
+  },
+  "requires_primitives": ["deploy-edge-function", "remote-mcp"],
+  "learning_order": 2,
+  "tags": ["social-media", "transcription", "tiktok", "instagram", "youtube", "tokscript", "elevenlabs", "video"],
+  "difficulty": "intermediate",
+  "estimated_time": "60 minutes",
+  "created": "2026-05-03",
+  "updated": "2026-05-05"
+}
