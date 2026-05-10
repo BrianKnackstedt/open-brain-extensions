@@ -34,10 +34,12 @@ const PROVIDER_IDS = [
 ] as const;
 const PLATFORM_IDS = ["tiktok", "instagram", "youtube", "unknown"] as const;
 const CONTENT_TYPES = ["video", "photo_carousel", "unknown"] as const;
+const FILTER_WILDCARD = "all" as const;
 
 type ProviderId = typeof PROVIDER_IDS[number];
 type Platform = typeof PLATFORM_IDS[number];
 type ContentType = typeof CONTENT_TYPES[number];
+type FilterValue<T extends string> = T | typeof FILTER_WILDCARD;
 type JsonObject = Record<string, unknown>;
 
 const DEBUG_MAX_STRING_LENGTH = 2000;
@@ -1398,6 +1400,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function normalizeFilterValue<T extends string>(
+  value: FilterValue<T> | undefined,
+): T | undefined {
+  if (!value || value === FILTER_WILDCARD) return undefined;
+  return value;
+}
+
 async function resolveTranscript(url: string): Promise<ResolvedTranscript> {
   const selection = await selectProvider(url);
   let scrapedData: TikTokPageData = { imageUrls: [] };
@@ -1975,21 +1984,37 @@ app.post("*", async (c) => {
       threshold: z.number().min(0).max(1).optional().default(0.5).describe(
         "Minimum similarity score from 0 to 1",
       ),
-      platform: z.enum(PLATFORM_IDS).optional().describe("Filter by platform"),
-      provider: z.enum(PROVIDER_IDS).optional().describe(
-        "Filter by selected provider",
-      ),
-      content_type: z.enum(CONTENT_TYPES).optional().describe(
-        "Filter by content type",
-      ),
+      platform: z.union([z.enum(PLATFORM_IDS), z.literal(FILTER_WILDCARD)])
+        .optional()
+        .describe(
+          "Filter by platform. Use 'all' or omit to search every platform; 'unknown' matches only records stored as unknown.",
+        ),
+      provider: z.union([z.enum(PROVIDER_IDS), z.literal(FILTER_WILDCARD)])
+        .optional()
+        .describe(
+          "Filter by selected provider. Use 'all' or omit to search every provider.",
+        ),
+      content_type: z.union([
+        z.enum(CONTENT_TYPES),
+        z.literal(FILTER_WILDCARD),
+      ])
+        .optional()
+        .describe(
+          "Filter by content type. Use 'all' or omit to search every content type; 'unknown' matches only records stored as unknown.",
+        ),
     },
     async ({ query, limit, threshold, platform, provider, content_type }) => {
       try {
         const embedding = await getEmbedding(query);
+        const normalizedPlatform = normalizeFilterValue(platform);
+        const normalizedProvider = normalizeFilterValue(provider);
+        const normalizedContentType = normalizeFilterValue(content_type);
         const filter = {
-          ...(platform ? { platform } : {}),
-          ...(provider ? { provider } : {}),
-          ...(content_type ? { content_type } : {}),
+          ...(normalizedPlatform ? { platform: normalizedPlatform } : {}),
+          ...(normalizedProvider ? { provider: normalizedProvider } : {}),
+          ...(normalizedContentType
+            ? { content_type: normalizedContentType }
+            : {}),
         };
         const { data, error } = await supabase.rpc(
           "match_social_media_transcripts",
@@ -2016,19 +2041,33 @@ app.post("*", async (c) => {
     "list_social_media_transcripts",
     "List saved social media transcripts in Open Brain, optionally filtered by platform, provider, or content type.",
     {
-      platform: z.enum(PLATFORM_IDS).optional().describe("Filter by platform"),
-      provider: z.enum(PROVIDER_IDS).optional().describe(
-        "Filter by selected provider",
-      ),
-      content_type: z.enum(CONTENT_TYPES).optional().describe(
-        "Filter by content type",
-      ),
+      platform: z.union([z.enum(PLATFORM_IDS), z.literal(FILTER_WILDCARD)])
+        .optional()
+        .describe(
+          "Filter by platform. Use 'all' or omit to list every platform; 'unknown' matches only records stored as unknown.",
+        ),
+      provider: z.union([z.enum(PROVIDER_IDS), z.literal(FILTER_WILDCARD)])
+        .optional()
+        .describe(
+          "Filter by selected provider. Use 'all' or omit to list every provider.",
+        ),
+      content_type: z.union([
+        z.enum(CONTENT_TYPES),
+        z.literal(FILTER_WILDCARD),
+      ])
+        .optional()
+        .describe(
+          "Filter by content type. Use 'all' or omit to list every content type; 'unknown' matches only records stored as unknown.",
+        ),
       limit: z.number().min(1).max(100).optional().default(20).describe(
         "Max records to return",
       ),
     },
     async ({ platform, provider, content_type, limit }) => {
       try {
+        const normalizedPlatform = normalizeFilterValue(platform);
+        const normalizedProvider = normalizeFilterValue(provider);
+        const normalizedContentType = normalizeFilterValue(content_type);
         let query = supabase
           .from("social_media_transcripts")
           .select(
@@ -2037,9 +2076,11 @@ app.post("*", async (c) => {
           .order("created_at", { ascending: false })
           .limit(limit ?? 20);
 
-        if (platform) query = query.eq("platform", platform);
-        if (provider) query = query.eq("provider", provider);
-        if (content_type) query = query.eq("content_type", content_type);
+        if (normalizedPlatform) query = query.eq("platform", normalizedPlatform);
+        if (normalizedProvider) query = query.eq("provider", normalizedProvider);
+        if (normalizedContentType) {
+          query = query.eq("content_type", normalizedContentType);
+        }
 
         const { data, error } = await query;
         if (error) throw new Error(`List failed: ${error.message}`);
