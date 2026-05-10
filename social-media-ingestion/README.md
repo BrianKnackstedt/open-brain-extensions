@@ -40,6 +40,8 @@ When TokScript is attempted, the saved transcript metadata can include a `tokscr
 - `list_default_provider_preferences` - List saved provider preferences in priority order
 - `delete_default_provider_preference` - Remove a saved provider preference
 
+For `search_social_media_transcripts` and `list_social_media_transcripts`, omit filter arguments or pass `all` to avoid filtering. `unknown` is treated as an exact stored metadata value, not a wildcard.
+
 ## Prerequisites
 
 - Working Open Brain setup
