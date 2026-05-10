@@ -1,0 +1,14 @@
+{
+  "tasks": {
+    "check": "deno check index.ts",
+    "fmt": "deno fmt index.ts"
+  },
+  "imports": {
+    "@supabase/functions-js/edge-runtime.d.ts": "jsr:@supabase/functions-js@2.105.3/edge-runtime.d.ts",
+    "@hono/mcp": "npm:@hono/mcp@0.1.1",
+    "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@1.24.3",
+    "hono": "npm:hono@4.9.2",
+    "zod": "npm:zod@4.1.13",
+    "@supabase/supabase-js": "npm:@supabase/supabase-js@2.47.10"
+  }
+}

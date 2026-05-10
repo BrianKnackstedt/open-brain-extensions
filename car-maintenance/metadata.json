@@ -1,0 +1,21 @@
+{
+  "name": "Car Maintenance Tracker",
+  "description": "Vehicle-aware maintenance tracker with mileage intervals, service history, upcoming tasks, watch lists, checklists, and cost estimates.",
+  "category": "extensions",
+  "author": {
+    "name": "Brian Knackstedt",
+    "github": "BrianKnackstedt"
+  },
+  "version": "1.2.0",
+  "requires": {
+    "open_brain": true,
+    "services": [],
+    "tools": ["Supabase CLI"]
+  },
+  "requires_primitives": ["deploy-edge-function", "remote-mcp"],
+  "tags": ["vehicle", "maintenance", "mileage", "automotive"],
+  "difficulty": "intermediate",
+  "estimated_time": "45-60 minutes",
+  "created": "2026-05-10",
+  "updated": "2026-05-10"
+}
