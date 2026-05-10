@@ -2,13 +2,13 @@
 
 ## Why This Matters
 
-You found a TikTok, Instagram Reel, YouTube Short, or hosted video with something worth remembering. A bookmark saves the location, but a transcript saves the idea. This extension connects Open Brain to social media transcription providers so your AI can reason over the actual content later.
+You found a TikTok, Instagram Reel, YouTube video or Short, or hosted video with something worth remembering. A bookmark saves the location, but a transcript saves the idea. This extension connects Open Brain to social media transcription providers so your AI can reason over the actual content later.
 
 ## What It Does
 
 Fetches and stores social media transcripts in dedicated Open Brain tables with semantic search support. Provider selection is automatic by default, and deployment-level preferences can override the built-in routing rules.
 
-For YouTube, the extension now prefers native caption tracks when they are available. That keeps transcript costs down and avoids running speech-to-text for videos that already expose captions.
+For YouTube, the extension now prefers TokScript first, then falls back to native caption tracks, and finally ElevenLabs. That keeps TokScript as the primary extractor while still preserving lower-cost and last-resort fallback paths.
 
 **Provider selection:**
 
@@ -16,7 +16,7 @@ For YouTube, the extension now prefers native caption tracks when they are avail
 |----------|---------------|
 | TikTok photo carousel (`/photo/`) | TikTok slide scrape plus OpenRouter vision OCR first; TokScript if slide scraping returns no images |
 | TikTok video | ElevenLabs Speech to Text `source_url` |
-| YouTube Shorts / YouTube video | Native YouTube captions first; TokScript if captions are unavailable; ElevenLabs as final fallback |
+| YouTube Shorts / YouTube video | TokScript first; native YouTube captions if TokScript is unavailable or returns no usable transcript; ElevenLabs as final fallback |
 | Instagram Reels | TokScript |
 | Unknown hosted media URL | ElevenLabs Speech to Text `source_url` |
 
@@ -27,12 +27,15 @@ For YouTube, the extension now prefers native caption tracks when they are avail
 - `social_media_oauth_state` - Ephemeral PKCE state during TokScript OAuth login
 - `social_media_provider_preferences` - Stores deployment-level provider preferences that override default routing
 
+When TokScript is attempted, the saved transcript metadata can include a `tokscript_debug` object with the tool name, normalized request arguments, outcome, and a truncated raw provider response or error payload to help diagnose fallback behavior later.
+
 **MCP Tools:**
 
 - `save_social_media_transcript` - Fetch and store a transcript from a supported social media URL
 - `get_social_media_transcript_preview` - Fetch a transcript without saving it
 - `search_social_media_transcripts` - Semantically search your saved transcript library
 - `list_social_media_transcripts` - List saved transcripts, filterable by platform, provider, or content type
+- `get_social_media_transcript_debug` - Inspect saved transcript metadata, including `tokscript_debug` payloads when present
 - `set_default_provider_preference` - Save or update a deployment-level provider preference
 - `list_default_provider_preferences` - List saved provider preferences in priority order
 - `delete_default_provider_preference` - Remove a saved provider preference

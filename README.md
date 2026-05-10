@@ -8,13 +8,15 @@
 
 | Extension | Description |
 |-----------|-------------|
-| [social-media-ingestion](./social-media-ingestion) | Fetch and store social media transcripts from TikTok, Instagram Reels, YouTube Shorts, and hosted media URLs via native YouTube captions, TokScript, ElevenLabs, and OpenRouter vision OCR |
+| [social-media-ingestion](./social-media-ingestion) | Fetch and store social media transcripts from TikTok, Instagram Reels, full-length YouTube videos and Shorts, and hosted media URLs via native YouTube captions, TokScript, ElevenLabs, and OpenRouter vision OCR |
 
 ---
 
 ## Prerequisites
 
 Each extension assumes a working Open Brain setup. See the [Open Brain repository](https://github.com/NateBJones-Projects/OB1) for base setup instructions.
+
+Ensure Supabase CLI for Windows is using the latest version by running `scoop update supabase`
 
 ---
 

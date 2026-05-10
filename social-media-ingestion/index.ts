@@ -40,6 +40,10 @@ type Platform = typeof PLATFORM_IDS[number];
 type ContentType = typeof CONTENT_TYPES[number];
 type JsonObject = Record<string, unknown>;
 
+const DEBUG_MAX_STRING_LENGTH = 2000;
+const DEBUG_MAX_ARRAY_ITEMS = 20;
+const DEBUG_MAX_OBJECT_KEYS = 40;
+
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -118,24 +122,33 @@ interface ResolvedTranscript {
   selectionReason: string;
   visionUsed: boolean;
   visionImageUrls: string[];
+  debugMetadata?: JsonObject;
+}
+
+interface TokScriptCallResult {
+  result: unknown;
+  debugMetadata: JsonObject;
 }
 
 class ProviderError extends Error {
   provider: ProviderId;
   code: string;
   isWarning: boolean;
+  details?: JsonObject;
 
   constructor(
     provider: ProviderId,
     message: string,
     code: string,
     isWarning = false,
+    details?: JsonObject,
   ) {
     super(message);
     this.name = "ProviderError";
     this.provider = provider;
     this.code = code;
     this.isWarning = isWarning;
+    this.details = details;
   }
 }
 
@@ -225,9 +238,9 @@ const DEFAULT_PROVIDER_RULES: ProviderSelectionRule[] = [
   },
   {
     matches: ({ platform }) => platform === "youtube",
-    provider: "youtube_captions",
+    provider: "tokscript",
     reason:
-      "YouTube URLs try native caption tracks first, then TokScript, then ElevenLabs.",
+      "YouTube URLs prefer TokScript first, then native caption tracks, then ElevenLabs.",
   },
   {
     matches: ({ platform }) => platform === "tiktok",
@@ -482,10 +495,96 @@ function getProviderWarning(
   }
 
   for (const candidate of candidates) {
-    if (/daily extraction limit reached/i.test(candidate)) return candidate;
+    if (
+      /(daily extraction limit reached|rate limit|too many requests|quota|credits?.*(exhausted|depleted|used)|limit.*reached|usage.*limit|allowance.*reached)/i
+        .test(candidate)
+    ) {
+      return candidate;
+    }
   }
 
   return null;
+}
+
+function isProviderLimitWarning(error: unknown): boolean {
+  return error instanceof ProviderError && error.code === "provider_limit";
+}
+
+function truncateDebugString(value: string): string {
+  if (value.length <= DEBUG_MAX_STRING_LENGTH) return value;
+  return `${value.slice(0, DEBUG_MAX_STRING_LENGTH)}...[truncated]`;
+}
+
+function normalizeDebugValue(value: unknown, depth = 0): unknown {
+  if (value === null || value === undefined) return null;
+  if (
+    typeof value === "boolean" ||
+    typeof value === "number"
+  ) {
+    return value;
+  }
+
+  if (typeof value === "string") return truncateDebugString(value);
+
+  if (depth >= 4) return truncateDebugString(JSON.stringify(value));
+
+  if (Array.isArray(value)) {
+    return value.slice(0, DEBUG_MAX_ARRAY_ITEMS).map((item) =>
+      normalizeDebugValue(item, depth + 1)
+    );
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(record)
+        .slice(0, DEBUG_MAX_OBJECT_KEYS)
+        .map(([key, nestedValue]) => [key, normalizeDebugValue(nestedValue, depth + 1)]),
+    );
+  }
+
+  return truncateDebugString(String(value));
+}
+
+function buildTokScriptDebugMetadata(
+  toolName: string,
+  args: Record<string, unknown>,
+  outcome: "success" | "warning" | "error",
+  rawResponse?: unknown,
+  error?: unknown,
+): JsonObject {
+  const debug: JsonObject = {
+    tool: toolName,
+    args: normalizeDebugValue(args),
+    outcome,
+    captured_at: new Date().toISOString(),
+  };
+
+  if (rawResponse !== undefined) {
+    debug.raw_response = normalizeDebugValue(rawResponse);
+  }
+
+  if (error !== undefined) {
+    debug.error = normalizeDebugValue(
+      error instanceof Error ? error.message : error,
+    );
+  }
+
+  return debug;
+}
+
+function getProviderDebugMetadata(error: unknown): JsonObject | undefined {
+  if (!(error instanceof ProviderError) || !error.details) return undefined;
+  return error.details;
+}
+
+function mergeDebugMetadata(
+  base?: JsonObject,
+  extra?: JsonObject,
+): JsonObject | undefined {
+  if (!base) return extra;
+  if (!extra) return base;
+  return { ...base, ...extra };
 }
 
 async function fetchTikTokPageData(tiktokUrl: string): Promise<TikTokPageData> {
@@ -707,7 +806,7 @@ async function getValidTokScriptAccessToken(): Promise<string> {
 async function callTokScript(
   toolName: string,
   args: Record<string, unknown>,
-): Promise<unknown> {
+): Promise<TokScriptCallResult> {
   const token = await getValidTokScriptAccessToken();
   const body = {
     jsonrpc: "2.0",
@@ -732,6 +831,15 @@ async function callTokScript(
       "tokscript",
       `TokScript MCP error (${r.status}): ${msg}`,
       "provider_request_failed",
+      false,
+      {
+        tokscript_debug: buildTokScriptDebugMetadata(
+          toolName,
+          args,
+          "error",
+          { status: r.status, body: msg },
+        ),
+      },
     );
   }
 
@@ -742,7 +850,19 @@ async function callTokScript(
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const parsed = JSON.parse(lines[i].slice(6));
-        if (parsed.result) return parsed.result;
+        if (parsed.result) {
+          return {
+            result: parsed.result,
+            debugMetadata: {
+              tokscript_debug: buildTokScriptDebugMetadata(
+                toolName,
+                args,
+                "success",
+                parsed.result,
+              ),
+            },
+          };
+        }
       } catch {
         // Continue looking for a parseable result.
       }
@@ -751,6 +871,15 @@ async function callTokScript(
       "tokscript",
       "No parseable result in TokScript SSE response.",
       "provider_response_invalid",
+      false,
+      {
+        tokscript_debug: buildTokScriptDebugMetadata(
+          toolName,
+          args,
+          "error",
+          text,
+        ),
+      },
     );
   }
 
@@ -758,15 +887,48 @@ async function callTokScript(
   if (json.error) {
     const warning = getProviderWarning(json.error, JSON.stringify(json.error));
     if (warning) {
-      throw new ProviderError("tokscript", warning, "provider_limit", true);
+      throw new ProviderError(
+        "tokscript",
+        warning,
+        "provider_limit",
+        true,
+        {
+          tokscript_debug: buildTokScriptDebugMetadata(
+            toolName,
+            args,
+            "warning",
+            json,
+            warning,
+          ),
+        },
+      );
     }
     throw new ProviderError(
       "tokscript",
       `TokScript tool error: ${JSON.stringify(json.error)}`,
       "provider_request_failed",
+      false,
+      {
+        tokscript_debug: buildTokScriptDebugMetadata(
+          toolName,
+          args,
+          "error",
+          json,
+        ),
+      },
     );
   }
-  return json.result;
+  return {
+    result: json.result,
+    debugMetadata: {
+      tokscript_debug: buildTokScriptDebugMetadata(
+        toolName,
+        args,
+        "success",
+        json.result,
+      ),
+    },
+  };
 }
 
 async function loadTokScriptTranscript(
@@ -777,10 +939,17 @@ async function loadTokScriptTranscript(
   const toolName = platform === "youtube"
     ? "get_youtube_transcript"
     : "get_tiktok_transcript";
-  const result = await callTokScript(toolName, {
+  const tokScriptCall = await callTokScript(toolName, {
     video_url: url,
   });
-  return extractTokScriptTranscript(result, url, platform, contentType, toolName);
+  return extractTokScriptTranscript(
+    tokScriptCall.result,
+    url,
+    platform,
+    contentType,
+    toolName,
+    tokScriptCall.debugMetadata,
+  );
 }
 
 function extractTokScriptTranscript(
@@ -789,6 +958,7 @@ function extractTokScriptTranscript(
   platform: Platform,
   contentType: ContentType,
   toolName: string,
+  debugMetadata?: JsonObject,
 ): SocialMediaTranscript {
   const res = result as { content?: Array<{ type: string; text: string }> };
   const text = res?.content?.[0]?.text ?? JSON.stringify(result);
@@ -829,7 +999,10 @@ function extractTokScriptTranscript(
       duration: typeof parsed.duration === "number" ? parsed.duration : null,
       transcript,
       imageUrls: imageUrls.length > 0 ? [...new Set(imageUrls)] : undefined,
-      metadata: { tokscript_tool: toolName },
+      metadata: mergeDebugMetadata(
+        { tokscript_tool: toolName },
+        debugMetadata,
+      ),
     };
   } catch (error) {
     if (error instanceof ProviderError) throw error;
@@ -844,10 +1017,10 @@ function extractTokScriptTranscript(
       provider: "tokscript",
       contentType,
       transcript: text,
-      metadata: {
+      metadata: mergeDebugMetadata({
         tokscript_tool: toolName,
         response_format: "text",
-      },
+      }, debugMetadata),
     };
   }
 }
@@ -1310,28 +1483,7 @@ async function resolveYouTubeTranscript(
 ): Promise<ResolvedTranscript> {
   const fallbackReasons: string[] = [selection.reason];
 
-  if (selection.provider === "youtube_captions") {
-    try {
-      const transcript = await loadYouTubeCaptionsTranscript(
-        url,
-        selection.platform,
-        selection.contentType,
-      );
-      return {
-        transcript,
-        selectedProvider: "youtube_captions",
-        selectionReason: selection.reason,
-        visionUsed: false,
-        visionImageUrls: [],
-      };
-    } catch (error) {
-      fallbackReasons.push(
-        `Native YouTube captions were unavailable: ${formatProviderFallbackReason(error)}`,
-      );
-    }
-  }
-
-  if (selection.provider === "youtube_captions" || selection.provider === "tokscript") {
+  if (selection.provider === "tokscript") {
     try {
       const transcript = await loadTokScriptTranscript(
         url,
@@ -1341,13 +1493,64 @@ async function resolveYouTubeTranscript(
       return {
         transcript,
         selectedProvider: "tokscript",
+        selectionReason: selection.reason,
+        visionUsed: false,
+        visionImageUrls: [],
+        debugMetadata: transcript.metadata,
+      };
+    } catch (error) {
+      const tokScriptDebugMetadata = getProviderDebugMetadata(error);
+      fallbackReasons.push(
+        `TokScript primary failed: ${formatProviderFallbackReason(error)}`,
+      );
+
+      if (!isProviderLimitWarning(error)) {
+        fallbackReasons.push(
+          "Falling through to secondary providers because TokScript returned no usable transcript payload.",
+        );
+      }
+
+      if (tokScriptDebugMetadata) {
+        fallbackReasons.push("TokScript raw response was captured in transcript metadata.");
+      }
+
+      selection.reason = fallbackReasons.join(" ");
+      return resolveYouTubeSecondaryTranscript(
+        url,
+        selection,
+        tokScriptDebugMetadata,
+      );
+    }
+  }
+
+  return resolveYouTubeSecondaryTranscript(url, selection);
+}
+
+async function resolveYouTubeSecondaryTranscript(
+  url: string,
+  selection: ProviderSelection,
+  debugMetadata?: JsonObject,
+): Promise<ResolvedTranscript> {
+  const fallbackReasons = [selection.reason];
+
+  if (selection.provider === "tokscript" || selection.provider === "youtube_captions") {
+    try {
+      const transcript = await loadYouTubeCaptionsTranscript(
+        url,
+        selection.platform,
+        selection.contentType,
+      );
+      return {
+        transcript,
+        selectedProvider: "youtube_captions",
         selectionReason: fallbackReasons.join(" "),
         visionUsed: false,
         visionImageUrls: [],
+        debugMetadata,
       };
     } catch (error) {
       fallbackReasons.push(
-        `TokScript fallback failed: ${formatProviderFallbackReason(error)}`,
+        `Native YouTube captions fallback failed: ${formatProviderFallbackReason(error)}`,
       );
     }
   }
@@ -1363,6 +1566,7 @@ async function resolveYouTubeTranscript(
     selectionReason: fallbackReasons.join(" "),
     visionUsed: false,
     visionImageUrls: [],
+    debugMetadata,
   };
 }
 
@@ -1424,6 +1628,7 @@ async function fingerprintUrl(url: string): Promise<string> {
 function buildTranscriptMetadata(resolved: ResolvedTranscript): JsonObject {
   return {
     ...(resolved.transcript.metadata ?? {}),
+    ...(resolved.debugMetadata ?? {}),
     selected_provider: resolved.selectedProvider,
     selection_reason: resolved.selectionReason,
     vision_extracted: resolved.visionUsed,
@@ -1842,6 +2047,53 @@ app.post("*", async (c) => {
           success: true,
           count: data.length,
           transcripts: data,
+        });
+      } catch (err) {
+        return responseError(err);
+      }
+    },
+  );
+
+  server.tool(
+    "get_social_media_transcript_debug",
+    "Inspect saved transcript metadata and provider debug payloads, including TokScript raw response diagnostics when available.",
+    {
+      url: z.string().url().optional().describe(
+        "Optional exact transcript URL to inspect.",
+      ),
+      limit: z.number().int().min(1).max(25).optional().default(10).describe(
+        "Max records to return when url is omitted.",
+      ),
+      require_tokscript_debug: z.boolean().optional().default(true).describe(
+        "When true, only return records whose metadata includes tokscript_debug.",
+      ),
+    },
+    async ({ url, limit, require_tokscript_debug }) => {
+      try {
+        const fetchLimit = url ? 1 : Math.max(limit ?? 10, 10) * 3;
+        let query = supabase
+          .from("social_media_transcripts")
+          .select(
+            "id, url, platform, provider, content_type, title, author, created_at, metadata",
+          )
+          .order("created_at", { ascending: false })
+          .limit(fetchLimit);
+
+        if (url) query = query.eq("url", url);
+
+        const { data, error } = await query;
+        if (error) throw new Error(`Debug lookup failed: ${error.message}`);
+
+        const records = (data ?? []).filter((row) => {
+          if (!require_tokscript_debug) return true;
+          const metadata = asRecord(row.metadata);
+          return !!metadata && !!asRecord(metadata.tokscript_debug);
+        }).slice(0, url ? 1 : (limit ?? 10));
+
+        return responseJson({
+          success: true,
+          count: records.length,
+          records,
         });
       } catch (err) {
         return responseError(err);

@@ -1,6 +1,6 @@
 {
   "name": "Social Media Ingestion",
-  "description": "Fetch and store social media transcripts from TikTok, Instagram Reels, YouTube Shorts, and hosted media URLs into dedicated Open Brain tables with semantic search.",
+  "description": "Fetch and store social media transcripts from TikTok, Instagram Reels, full-length YouTube videos and Shorts, and hosted media URLs into dedicated Open Brain tables with semantic search.",
   "category": "extensions",
   "author": {
     "name": "Nate B. Jones",
