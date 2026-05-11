@@ -8,7 +8,8 @@
 
 | Extension | Description |
 |-----------|-------------|
-| [social-media-ingestion](./social-media-ingestion) | Fetch and store social media transcripts from TikTok, Instagram Reels, full-length YouTube videos and Shorts, and hosted media URLs via native YouTube captions, TokScript, ElevenLabs, and OpenRouter vision OCR |
+| [car-maintenance](./car-maintenance) | Vehicle-aware maintenance tracker with mileage intervals, service history, upcoming tasks, watch lists, checklists, and cost estimates |
+| [social-media-ingestion](./social-media-ingestion) | Fetch and store social media transcripts from TikTok, Instagram Reels, full-length YouTube videos and Shorts, and hosted media URLs into dedicated Open Brain tables with semantic search |
 
 ---
 
