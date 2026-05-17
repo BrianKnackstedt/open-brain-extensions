@@ -567,6 +567,55 @@ function registerTools(
   );
 
   server.tool(
+    "list_vehicles",
+    "List stored vehicles and optionally filter by a partial vehicle search string.",
+    {
+      query: z.string().optional().describe(
+        "Optional partial match across vehicle name, make, model, trim, or license plate",
+      ),
+      limit: z.number().int().positive().max(100).optional().describe(
+        "Maximum number of vehicles to return, default 25",
+      ),
+    },
+    async (args) => {
+      try {
+        const limit = args.limit ?? 25;
+        let vehicleQuery = supabase
+          .from("vehicles")
+          .select("*")
+          .eq("user_id", userId)
+          .order("updated_at", { ascending: false })
+          .limit(limit);
+
+        if (args.query) {
+          vehicleQuery = vehicleQuery.or(
+            [
+              `name.ilike.%${args.query}%`,
+              `make.ilike.%${args.query}%`,
+              `model.ilike.%${args.query}%`,
+              `trim.ilike.%${args.query}%`,
+              `license_plate.ilike.%${args.query}%`,
+            ].join(","),
+          );
+        }
+
+        const { data, error } = await vehicleQuery;
+        if (error) {
+          throw new Error(`Failed to list vehicles: ${error.message}`);
+        }
+
+        return textResult({
+          success: true,
+          count: data?.length ?? 0,
+          vehicles: data ?? [],
+        });
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.tool(
     "update_vehicle_mileage",
     "Update a vehicle's current mileage and mileage date.",
     {
@@ -912,6 +961,9 @@ function registerTools(
       task_id: z.string().uuid().optional().describe(
         "Related maintenance task UUID",
       ),
+      task_name: z.string().optional().describe(
+        "Exact related maintenance task name when the task UUID is not known",
+      ),
       completed_at: z.string().optional().describe("Completion timestamp/date"),
       mileage: z.number().int().nonnegative().describe(
         "Odometer mileage at completion",
@@ -935,37 +987,40 @@ function registerTools(
     },
     async (args) => {
       try {
-        const { data, error } = await supabase
-          .from("vehicle_maintenance_logs")
-          .insert(stripUndefined({
-            user_id: userId,
-            vehicle_id: args.vehicle_id,
+        const completedAt = normalizeOptionalDateInput(args.completed_at) ??
+          new Date().toISOString();
+        const taskId = await resolveTaskReference(
+          supabase,
+          userId,
+          args.vehicle_id,
+          new Map<string, Record<string, unknown>>(),
+          {
             task_id: args.task_id,
-            completed_at: args.completed_at ?? new Date().toISOString(),
-            mileage: args.mileage,
-            performed_by: args.performed_by,
-            vendor_name: args.vendor_name,
-            cost: args.cost,
-            service_items: args.service_items ?? [],
-            parts_fluids: args.parts_fluids ?? {},
-            notes: args.notes,
-            next_action: args.next_action,
-            source: args.source,
-            metadata: args.metadata ?? {},
-          }))
-          .select("*")
-          .single();
+            task_name: args.task_name,
+          },
+        );
 
-        if (error) {
-          throw new Error(`Failed to log maintenance: ${error.message}`);
-        }
+        const data = await ensureLog(supabase, userId, args.vehicle_id, {
+          task_id: taskId,
+          completed_at: completedAt,
+          mileage: args.mileage,
+          performed_by: args.performed_by,
+          vendor_name: args.vendor_name,
+          cost: args.cost,
+          service_items: args.service_items ?? [],
+          parts_fluids: args.parts_fluids ?? {},
+          notes: args.notes,
+          next_action: args.next_action,
+          source: args.source,
+          metadata: args.metadata ?? {},
+        });
 
         let updatedTask = null;
-        if (args.task_id) {
+        if (taskId) {
           const { data: task, error: taskError } = await supabase
             .from("vehicle_maintenance_tasks")
             .select("*")
-            .eq("id", args.task_id)
+            .eq("id", taskId)
             .eq("user_id", userId)
             .maybeSingle();
 
@@ -1211,7 +1266,7 @@ function registerTools(
         if (args.task_name || args.category) {
           let taskQuery = supabase
             .from("vehicle_maintenance_tasks")
-            .select("id")
+            .select("id, name, category")
             .eq("user_id", userId);
 
           if (args.vehicle_id) {
@@ -1230,7 +1285,7 @@ function registerTools(
           }
 
           taskIds = (matchingTasks ?? []).map((task) => task.id);
-          if (taskIds.length === 0) {
+          if (args.category && taskIds.length === 0) {
             return textResult({ success: true, count: 0, logs: [] });
           }
         }
@@ -1247,7 +1302,9 @@ function registerTools(
         if (args.vehicle_id) {
           logQuery = logQuery.eq("vehicle_id", args.vehicle_id);
         }
-        if (taskIds) logQuery = logQuery.in("task_id", taskIds);
+        if (args.category && taskIds) {
+          logQuery = logQuery.in("task_id", taskIds);
+        }
         if (args.vendor_name) {
           logQuery = logQuery.ilike("vendor_name", `%${args.vendor_name}%`);
         }
@@ -1271,10 +1328,44 @@ function registerTools(
           );
         }
 
+        const taskIdSet = new Set(taskIds ?? []);
+        const taskNameNeedle = normalizeStringForKey(args.task_name);
+        const filteredLogs = (data ?? []).filter((log) => {
+          const linkedTask = log.vehicle_maintenance_tasks as
+            | Record<string, unknown>
+            | null;
+
+          if (args.category && !taskIdSet.has(String(log.task_id ?? ""))) {
+            return false;
+          }
+
+          if (!args.task_name) {
+            return true;
+          }
+
+          if (taskIdSet.has(String(log.task_id ?? ""))) {
+            return true;
+          }
+
+          const linkedTaskName = normalizeStringForKey(linkedTask?.name);
+          if (linkedTaskName.includes(taskNameNeedle)) {
+            return true;
+          }
+
+          const logText = normalizeStringForKey([
+            log.notes,
+            log.next_action,
+            log.source,
+            stableSerialize(log.service_items ?? []),
+          ].join(" "));
+
+          return logText.includes(taskNameNeedle);
+        });
+
         return textResult({
           success: true,
-          count: data?.length ?? 0,
-          logs: data ?? [],
+          count: filteredLogs.length,
+          logs: filteredLogs,
         });
       } catch (error) {
         return errorResult(error);
@@ -1936,8 +2027,8 @@ async function seedSampleVehiclePlan(
     immediate_next_actions: [
       "Schedule wheel alignment ASAP to protect the new tires.",
       "Schedule brake fluid exchange; it is overdue and moisture-sensitive.",
-      "Schedule spark plug replacement/inspection per the 48,000-mile recommendation.",
       "Plan a transmission fluid drain-and-fill soon using the manufacturer-approved fluid; avoid aggressive flushes.",
+      "Track spark plugs as a long-term 100,000-mile maintenance item unless updated Kia service information says otherwise.",
     ],
   };
 }
@@ -1995,6 +2086,7 @@ async function importVehiclePlan(
 
   const logResults = [];
   for (const log of plan.logs ?? []) {
+    const { task_name: _logTaskName, ...logWithoutTaskName } = log;
     const taskId = await resolveTaskReference(
       supabase,
       userId,
@@ -2007,7 +2099,7 @@ async function importVehiclePlan(
     );
 
     logResults.push(await ensureLog(supabase, userId, vehicleId, {
-      ...log,
+      ...logWithoutTaskName,
       task_id: taskId,
       completed_at: normalizeOptionalDateInput(
         log.completed_at as string | undefined,
@@ -2020,6 +2112,10 @@ async function importVehiclePlan(
 
   const timelineResults = [];
   for (const timelineItem of plan.timeline_items ?? []) {
+    const {
+      task_name: _timelineTaskName,
+      ...timelineItemWithoutTaskName
+    } = timelineItem;
     const taskId = await resolveTaskReference(
       supabase,
       userId,
@@ -2033,7 +2129,7 @@ async function importVehiclePlan(
 
     timelineResults.push(
       await ensureTimelineItem(supabase, userId, vehicleId, {
-        ...timelineItem,
+        ...timelineItemWithoutTaskName,
         task_id: taskId,
         target_date: normalizeOptionalDateOnlyInput(
           timelineItem.target_date as string | undefined,
@@ -2126,7 +2222,7 @@ async function resolveTaskReference(
 
   if (!data) {
     throw new Error(
-      `Task reference '${ref.task_name}' could not be resolved for vehicle import`,
+      `Task reference '${ref.task_name}' could not be resolved for this vehicle`,
     );
   }
 
@@ -2915,11 +3011,11 @@ function buildSampleTaskSeeds(
       name: "Spark plugs",
       category: "spark_ignition",
       description:
-        "Inspect or replace spark plugs for turbo-engine reliability.",
-      interval_miles: 48000,
+        "Replace spark plugs at 100,000 miles for long-term turbo-engine maintenance planning.",
+      interval_miles: 100000,
       priority: "high",
-      next_due_mileage: options.currentMileage,
-      next_due_at: asTimestamp(options.mileageAsOf),
+      next_due_mileage: 100000,
+      next_due_at: asTimestamp(estimate(100000)),
       estimated_diy_cost_min: 60,
       estimated_diy_cost_max: 120,
       estimated_shop_cost_min: 250,
@@ -2930,7 +3026,7 @@ function buildSampleTaskSeeds(
       watch_tags: ["Carbon buildup", "Turbo oil health"],
       source: SAMPLE_SEED_SOURCE,
       notes:
-        "Overdue from the 48,000-mile sample recommendation. Confirm the exact turbo-engine interval from the owner manual or manufacturer service schedule.",
+        "Track spark plugs as a 100,000-mile maintenance item unless exact Kia service information for this engine calls for a different interval.",
     },
   ];
 }
@@ -2942,11 +3038,11 @@ function buildSampleLogSeeds(
   return [
     {
       vehicle_id: vehicleId,
-      task_id: taskMap.get("Tire rotation")?.id,
       completed_at: "2026-05-02T12:00:00Z",
       mileage: 48688,
       performed_by: "Tire shop",
-      vendor_name: "Example tire service visit",
+      vendor_name: "Discount Tire, Palatine, IL",
+      cost: 896.91,
       service_items: [
         { name: "Replaced and balanced all 4 tires" },
       ],
@@ -2963,78 +3059,27 @@ function buildSampleLogSeeds(
     },
     {
       vehicle_id: vehicleId,
-      task_id: taskMap.get("Engine oil and filter")?.id,
       completed_at: "2026-05-09T12:00:00Z",
       mileage: 49010,
-      performed_by: "Shop/dealer",
-      vendor_name: "Recent service visit",
+      performed_by: "Dealer",
+      vendor_name: "Bob Rohrman Schaumberg Kia",
+      cost: 59.99,
       service_items: [
         { name: "Oil change and inspection" },
-      ],
-      parts_fluids: {
-        oil_tracking_needed: "Record oil brand and viscosity when known",
-      },
-      notes:
-        "Oil change and inspection completed. This is the baseline for the reliability maintenance plan.",
-      next_action:
-        "Next oil service at 54,010 miles or by 6 months; mileage is likely first.",
-      source: SAMPLE_SEED_SOURCE,
-      metadata: { seed_key: "2026-05-09-oil-change" },
-    },
-    {
-      vehicle_id: vehicleId,
-      task_id: taskMap.get("Cabin air filter")?.id,
-      completed_at: "2026-05-09T12:00:00Z",
-      mileage: 49010,
-      performed_by: "Shop/dealer",
-      vendor_name: "Recent service visit",
-      service_items: [
         { name: "Cabin air filter" },
-      ],
-      parts_fluids: {},
-      notes:
-        "Cabin air filter replaced during the same service visit as the oil change.",
-      next_action:
-        "Next cabin air filter service around 64,010 miles or 2027-05-09.",
-      source: SAMPLE_SEED_SOURCE,
-      metadata: { seed_key: "2026-05-09-cabin-air-filter" },
-    },
-    {
-      vehicle_id: vehicleId,
-      task_id: taskMap.get("Engine air filter inspection/replacement")?.id,
-      completed_at: "2026-05-09T12:00:00Z",
-      mileage: 49010,
-      performed_by: "Shop/dealer",
-      vendor_name: "Recent service visit",
-      service_items: [
         { name: "Engine air filter" },
-      ],
-      parts_fluids: {},
-      notes:
-        "Engine air filter replaced during the same service visit as the oil change.",
-      next_action: "Inspect the engine air filter again around 59,010 miles.",
-      source: SAMPLE_SEED_SOURCE,
-      metadata: { seed_key: "2026-05-09-engine-air-filter" },
-    },
-    {
-      vehicle_id: vehicleId,
-      task_id: taskMap.get("Red Line SI-1 fuel system cleaner")?.id,
-      completed_at: "2026-05-09T12:00:00Z",
-      mileage: 49010,
-      performed_by: "Shop/dealer",
-      vendor_name: "Recent service visit",
-      service_items: [
         { name: "Red Line SI-1 Complete Fuel System Cleaner" },
       ],
       parts_fluids: {
+        oil_tracking_needed: "Record oil brand and viscosity when known",
         fuel_system_cleaner: "Red Line SI-1 Complete Fuel System Cleaner",
       },
       notes:
-        "Red Line SI-1 fuel system cleaner added during the same service visit as the oil change.",
+        "Oil change and inspection completed. Cabin air filter replaced. Engine air filter replaced. Red Line SI-1 Complete Fuel System Cleaner added. Use this as the baseline for oil, filter, and fuel-cleaner planning and track oil brand and viscosity when known.",
       next_action:
-        "Next Red Line SI-1 treatment around 61,010-64,010 miles or by 2027-05-09.",
+        "Oil/filter next due at 54,010 miles or about 2026-10-15; follow the active filter and fuel-cleaner tasks after that.",
       source: SAMPLE_SEED_SOURCE,
-      metadata: { seed_key: "2026-05-09-red-line-si-1" },
+      metadata: { seed_key: "2026-05-09-service-visit" },
     },
   ];
 }
@@ -3057,6 +3102,16 @@ function buildSampleTimelineSeeds(
   const taskId = (name: string) => taskMap.get(name)?.id;
   const timeline: Record<string, unknown>[] = [
     {
+      title: "Tire installation and warranty baseline",
+      category: "brakes_tires",
+      item_type: "one_time",
+      target_mileage: 48688,
+      target_date: "2026-05-02",
+      priority: "medium",
+      notes:
+        "Continental Control Contact Tour M A/S installed and balanced at 48,688 miles. Use this as the tire warranty baseline and keep receipts, rotation records, alignment history, and tread-depth notes.",
+    },
+    {
       title: "Wheel alignment ASAP",
       category: "brakes_tires",
       item_type: "one_time",
@@ -3077,17 +3132,6 @@ function buildSampleTimelineSeeds(
       task_id: taskId("Brake fluid exchange"),
       notes:
         "Overdue from the 48,000-mile recommendation and important due to moisture absorption.",
-    },
-    {
-      title: "Spark plugs overdue",
-      category: "spark_ignition",
-      item_type: "one_time",
-      target_mileage: options.currentMileage,
-      target_date: options.mileageAsOf,
-      priority: "high",
-      task_id: taskId("Spark plugs"),
-      notes:
-        "Overdue from the 48,000-mile sample recommendation. Confirm the exact turbo-engine spec and interval.",
     },
     {
       title: "Transmission drain-and-fill soon",
@@ -3112,15 +3156,15 @@ function buildSampleTimelineSeeds(
         "Check bushings, struts, links, ball joints, and steering components after repeated pothole exposure.",
     },
     {
-      title: "Spark plugs and brake fluid milestone",
+      title: "Spark plug maintenance milestone",
       category: "spark_ignition",
       item_type: "projected",
-      target_mileage: 96000,
-      target_date: estimate(96000),
+      target_mileage: 100000,
+      target_date: estimate(100000),
       priority: "high",
       task_id: taskId("Spark plugs"),
       notes:
-        "Dealer reference also lists spark plugs and brake fluid at 96,000 miles. Reconfirm based on what is completed now.",
+        "Plan spark plug replacement around 100,000 miles unless updated Kia service information for this engine calls for a different interval.",
     },
     {
       title: "Coolant replacement planning milestone",
@@ -3207,7 +3251,7 @@ function buildSampleTimelineSeeds(
       target_date: estimate(mileage),
       priority: mileage === 96000 ? "high" : "medium",
       notes: mileage === 96000
-        ? "Dealer reference: oil/inspection, brake fluid exchange, spark plugs, tire rotation, cabin air filter, engine air filter. Compare against this extension's task history before approving work."
+        ? "Dealer reference: oil/inspection, brake fluid exchange, tire rotation, cabin air filter, engine air filter. Spark plugs are tracked separately at 100,000 miles in this plan."
         : "Dealer reference: oil/inspection, tire rotation, cabin air filter, engine air filter. Reliability plan uses 5,000-mile oil intervals and condition-based filter replacement.",
     });
   }

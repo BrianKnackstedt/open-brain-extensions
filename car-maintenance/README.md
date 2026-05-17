@@ -181,6 +181,10 @@ Register the deployed remote MCP endpoint using your normal Open Brain / MCP con
 
 Creates a vehicle record with mileage, climate, tire, and planning metadata.
 
+### `list_vehicles`
+
+Lists stored vehicles and supports partial search by vehicle name, make, model, trim, or license plate so users can recover the correct vehicle UUID before running vehicle-specific tools.
+
 ### `update_vehicle_mileage`
 
 Updates current odometer mileage and the date of that reading.
@@ -213,6 +217,10 @@ Creates a recurring or one-time task with mileage interval, day interval, cost e
 
 Logs completed service with mileage, cost, vendor, service items, parts/fluids, notes, and recommended next action.
 
+If you do not know the task UUID, you can provide the exact task name and the tool will resolve the stored task before inserting the log so the linked task's last/next due fields stay in sync.
+
+Repeated log submissions now reuse the same deterministic dedupe key path as full-plan imports when no explicit metadata key is provided, which reduces accidental duplicate service history rows during retries.
+
 ### `get_upcoming_vehicle_maintenance`
 
 Returns tasks due soon by date, mileage, seasonal timing, or overdue state.
@@ -222,6 +230,8 @@ Tasks with `seasonal_months` are only returned for date or mileage due checks wh
 ### `search_vehicle_maintenance_history`
 
 Searches logs by task name, category, vendor, date range, or mileage range.
+
+Task-name history search now also checks freeform log text for unlinked service entries, so older or manual logs without a `task_id` are still discoverable.
 
 ### `get_vehicle_timeline`
 
@@ -273,6 +283,23 @@ Or call the seed tool directly if your client exposes raw MCP tool execution:
 
 The seed data intentionally includes only a small recent maintenance history for demo purposes and does not invent older service history.
 
+## Rollout Checklist For Existing Deployments
+
+If you are updating an already-live deployment, use this order:
+
+1. Run `preflight-duplicate-checks.sql` in the Supabase SQL Editor and confirm every duplicate query returns zero rows.
+2. If any duplicate query returns rows, clean those up before continuing or the new unique indexes in `schema.sql` may fail to create.
+3. Re-run `schema.sql` in the Supabase SQL Editor so the new indexes and trigger-compatible constraints are applied.
+4. Redeploy the function with `supabase functions deploy car-maintenance-mcp --no-verify-jwt`.
+5. Refresh or reconnect the MCP server entry in your AI client so the updated tool schema is reloaded.
+
+The new rollout-sensitive changes are:
+
+- `list_vehicles` for vehicle discovery before UUID-based calls
+- retry-safe log deduplication in `log_vehicle_maintenance`
+- broader task-name history search for unlinked freeform logs
+- new unique indexes that align the database with the extension's upsert assumptions
+
 ## Verification Checklist
 
 After deployment, verify the following:
@@ -280,7 +307,7 @@ After deployment, verify the following:
 1. Health endpoint returns service name and version.
 2. `seed_sample_vehicle_plan` creates or updates the sample vehicle.
 3. The two recent maintenance log entries exist.
-4. Upcoming maintenance returns alignment, brake fluid, spark plugs, and transmission drain-and-fill as current high-priority items.
+4. Upcoming maintenance returns alignment, brake fluid, and transmission drain-and-fill as current high-priority items, while spark plugs remain a 100,000-mile planning item.
 5. Timeline output reaches at least 150,000 miles.
 6. Watch list includes carbon buildup, turbo oil health, battery aging, tire wear, and brake moisture contamination.
 7. Checklists exist for yearly ownership, pre-winter, and long highway trips.
@@ -300,6 +327,7 @@ After deployment, verify the following:
 
 - Confirm the `pgcrypto` extension is available.
 - Re-run `schema.sql` after checking table or trigger name conflicts.
+- Run `preflight-duplicate-checks.sql` first if the schema update fails while creating a new unique index.
 
 ### Due Dates Not Updating After Logging Maintenance
 
