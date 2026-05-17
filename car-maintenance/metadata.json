@@ -6,7 +6,7 @@
     "name": "Brian Knackstedt",
     "github": "BrianKnackstedt"
   },
-  "version": "1.2.0",
+  "version": "1.0.0",
   "requires": {
     "open_brain": true,
     "services": [],
@@ -17,5 +17,5 @@
   "difficulty": "intermediate",
   "estimated_time": "45-60 minutes",
   "created": "2026-05-10",
-  "updated": "2026-05-10"
+  "updated": "2026-05-16"
 }

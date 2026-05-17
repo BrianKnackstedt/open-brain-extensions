@@ -140,16 +140,24 @@ CREATE TABLE IF NOT EXISTS vehicle_checklist_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_vehicles_user ON vehicles(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_vehicles_user_name ON vehicles(user_id, name);
 CREATE INDEX IF NOT EXISTS idx_vehicle_tasks_user_vehicle ON vehicle_maintenance_tasks(user_id, vehicle_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_vehicle_tasks_user_vehicle_name ON vehicle_maintenance_tasks(user_id, vehicle_id, name);
 CREATE INDEX IF NOT EXISTS idx_vehicle_tasks_user_next_due_at ON vehicle_maintenance_tasks(user_id, next_due_at);
 CREATE INDEX IF NOT EXISTS idx_vehicle_tasks_user_next_due_mileage ON vehicle_maintenance_tasks(user_id, next_due_mileage);
 CREATE INDEX IF NOT EXISTS idx_vehicle_tasks_vehicle_category ON vehicle_maintenance_tasks(vehicle_id, category);
 CREATE INDEX IF NOT EXISTS idx_vehicle_logs_user_vehicle_completed ON vehicle_maintenance_logs(user_id, vehicle_id, completed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_vehicle_logs_vehicle_mileage ON vehicle_maintenance_logs(vehicle_id, mileage DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_vehicle_logs_user_vehicle_dedupe
+  ON vehicle_maintenance_logs(user_id, vehicle_id, ((metadata->>'import_dedupe_key')))
+  WHERE metadata ? 'import_dedupe_key';
 CREATE INDEX IF NOT EXISTS idx_vehicle_timeline_vehicle_mileage ON vehicle_timeline_items(user_id, vehicle_id, target_mileage);
 CREATE INDEX IF NOT EXISTS idx_vehicle_timeline_vehicle_date ON vehicle_timeline_items(user_id, vehicle_id, target_date);
 CREATE INDEX IF NOT EXISTS idx_vehicle_watch_vehicle_status ON vehicle_watch_items(user_id, vehicle_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_vehicle_watch_user_vehicle_topic ON vehicle_watch_items(user_id, vehicle_id, topic);
 CREATE INDEX IF NOT EXISTS idx_vehicle_checklists_type ON vehicle_checklists(user_id, vehicle_id, checklist_type);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_vehicle_checklists_user_vehicle_type_name ON vehicle_checklists(user_id, vehicle_id, checklist_type, name);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_vehicle_checklist_items_user_checklist_label ON vehicle_checklist_items(user_id, checklist_id, label);
 
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
